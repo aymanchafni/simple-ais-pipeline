@@ -19,9 +19,9 @@ python scripts/init_db.py
 # Exécuter le pipeline avec les données d'exemple
 echo "📊 Chargement des données d'exemple..."
 if [ -f "sample_data/sample_ais.csv" ]; then
-    #python scripts/run_pipeline.py --noaa-year 2024 --noaa-zone "01_01" --max-records 100000 --verbose
+    python scripts/run_pipeline.py --noaa-year 2024 --noaa-zone "01_01" --max-records 100000 --verbose
     
-    python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv --max-records 100 --verbose 
+    #python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv --max-records 100 --verbose 
     echo "✅ Données d'exemple chargées!"
 else
     echo "⚠️ Fichier de données d'exemple non trouvé, démarrage sans données"
