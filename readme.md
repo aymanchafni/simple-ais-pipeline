@@ -22,10 +22,10 @@ cd tanger-med-ais-pipeline
 Edit `scripts/docker_entrypoint.sh` and modify the pipeline command:
 ```bash
 # Default: downloads NOAA data (commented out by default)
-#python scripts/run_pipeline.py --noaa-year 2024 --noaa-zone "01_01" --max-records 100000
+python scripts/run_pipeline.py --noaa-year 2024 --noaa-zone "01_01" --max-records 100000
 
-# Currently active: loads sample data instead
-python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv --max-records 100 --verbose 
+# loads sample data instead
+#python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv --max-records 100 --verbose 
 
 # Other options you can use:
 # python scripts/run_pipeline.py --local-file /path/to/your/data.csv --max-records 10000
