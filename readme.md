@@ -15,7 +15,7 @@ A maritime traffic analysis system that processes ship tracking data (AIS) for p
 ### 1. Get the code and configure data loading
 ```bash
 git clone <this-repo>
-cd tanger-med-ais-pipeline
+cd simple-ais-pipeline
 ```
 
 **Configure data loading (optional):**
