@@ -1,0 +1,208 @@
+
+services:
+  # Base de données PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: tanger_med_postgres
+    environment:
+      POSTGRES_DB: tanger_med
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tanger_med"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Initialisation des données (approche corrigée)
+  data-init:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: tanger_med_init
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tanger_med
+      DB_USER: postgres
+      DB_PASSWORD: password
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./sample_data:/app/sample_data
+      - data_volume:/app/data
+      - logs_volume:/app/logs
+      - init_status:/app/status
+    working_dir: /app
+    command: ["/bin/bash", "/entrypoint.sh"]
+
+    restart: "no"
+
+  # Application principale (démarrage conditionnel)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tanger_med_api
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tanger_med
+      DB_USER: postgres
+      DB_PASSWORD: password
+      PYTHONPATH: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - data_volume:/app/data
+      - logs_volume:/app/logs
+      - init_status:/app/status
+    working_dir: /app
+    command: python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Dashboard Streamlit (Bonus)
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tanger_med_dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: tanger_med
+      DB_USER: postgres
+      DB_PASSWORD: password
+      PYTHONPATH: /app
+    depends_on:
+      app:
+        condition: service_healthy
+    volumes:
+      - ./dashboard:/app/dashboard
+      - ./src:/app/src
+    working_dir: /app
+    command: streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+    restart: unless-stopped
+    profiles:
+      - full
+
+  # Airflow Database Init (service temporaire)
+  airflow-init:
+    image: apache/airflow:2.7.2-python3.11
+    container_name: tanger_med_airflow_init
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:password@postgres:5432/airflow_db
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=true
+      - AIRFLOW__CORE__FERNET_KEY=fb0c_81_6382377900-6e95-49f5-bdg7-24b88c47cd1d
+      - _AIRFLOW_DB_MIGRATE=true
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - airflow_logs:/opt/airflow/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@tangermed.com || true
+      "
+    restart: "no"
+    profiles:
+      - full
+
+  # Airflow Webserver (Optionnel)
+  airflow-webserver:
+    image: apache/airflow:2.7.2-python3.11
+    container_name: tanger_med_airflow_web
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:password@postgres:5432/airflow_db
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=true
+      - AIRFLOW__CORE__FERNET_KEY=fb0c_81_6382377900-6e95-49f5-bdg7-24b88c47cd1d
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - airflow_logs:/opt/airflow/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: airflow webserver
+    restart: unless-stopped
+    profiles:
+      - full
+
+  # Scheduler Airflow
+  airflow-scheduler:
+    image: apache/airflow:2.7.2-python3.11
+    container_name: tanger_med_airflow_scheduler
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:password@postgres:5432/airflow_db
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=true
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__CORE__FERNET_KEY=fb0c_81_6382377900-6e95-49f5-bdg7-24b88c47cd1d
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - airflow_logs:/opt/airflow/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: airflow scheduler
+    restart: unless-stopped
+    profiles:
+      - full
+
+volumes:
+  postgres_data:
+    driver: local
+  airflow_logs:
+    driver: local
+  data_volume:
+    driver: local
+  logs_volume:
+    driver: local
+  init_status:
+    driver: local
+
+networks:
+  tanger_med_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

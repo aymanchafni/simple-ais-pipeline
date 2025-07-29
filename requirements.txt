@@ -1,0 +1,83 @@
+# ===============================================
+# TANGER MED AIS PIPELINE - REQUIREMENTS
+# ===============================================
+
+# API et Framework Web
+fastapi
+uvicorn[standard]
+pydantic
+
+# Base de données
+psycopg2-binary
+sqlalchemy
+
+# Traitement de données essentielles
+pandas
+numpy
+geopy
+
+# HTTP et réseau
+requests
+httpx
+
+# Configuration
+python-dotenv
+
+# Date et temps
+python-dateutil
+pytz
+
+# Utilitaires essentiels
+click
+python-multipart
+
+# JSON et sérialisation
+orjson
+
+# Tests
+pytest
+pytest-asyncio
+
+# ===============================================
+# FONCTIONNALITÉS BONUS (OPTIONNELLES)
+# ===============================================
+
+# Dashboard Streamlit
+streamlit
+plotly
+
+# Validation des données avancée
+great-expectations
+
+# Templates et rendu
+jinja2
+
+# Monitoring
+prometheus-client
+
+# Sécurité
+cryptography
+
+# Export de données
+openpyxl
+xlsxwriter
+
+# Logging avancé
+python-json-logger
+
+# ===============================================
+# OUTILS DE DÉVELOPPEMENT
+# ===============================================
+
+# Formatage et linting
+black
+flake8
+isort
+
+# ===============================================
+# NOTES:
+# - geopy: Calculs de distances géographiques
+# - great-expectations: Validation qualité données
+# - streamlit/plotly: Dashboard interactif
+# - Airflow installé séparément dans container
+# ===============================================
