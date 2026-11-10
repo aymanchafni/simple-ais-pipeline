@@ -1,10 +1,11 @@
-import pandas as pd
-from sqlalchemy import text
-from src.storage.database import DatabaseManager
-from src.config import Config
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any, Dict
+
+from sqlalchemy import text
+
+from src.config import Config
+from src.storage.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -354,12 +355,14 @@ def main():
         points = report['point_statistics']
         print(f"• Nombre total de navires: {points.get('total_vessels', 0)}")
         print(f"• Points moyens par navire: {points.get('avg_points_per_vessel', 0):.1f}")
-        print(f"• Points min/max par navire: {points.get('min_points_per_vessel', 0)} / {points.get('max_points_per_vessel', 0)}")
+        pmin, pmax = points.get('min_points_per_vessel', 0), points.get('max_points_per_vessel', 0)
+        print(f"• Points min/max par navire: {pmin} / {pmax}")
         
         print("\n🌊 MÉTRIQUES ADDITIONNELLES")
         additional = report['additional_metrics']
         print(f"• Vitesse moyenne de la flotte: {additional.get('fleet_avg_speed', 0):.1f} nœuds")
-        print(f"• Distance totale parcourue: {additional.get('total_fleet_distance', 0):,.1f} milles nautiques")
+        total_nm = additional.get('total_fleet_distance', 0)
+        print(f"• Distance totale parcourue: {total_nm:,.1f} milles nautiques")
         print(f"• Noms de navires uniques: {additional.get('unique_vessel_names', 0)}")
         
         print(f"\n📅 Rapport généré le: {report['generated_at']}")

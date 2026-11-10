@@ -3,8 +3,8 @@
 Script d'initialisation de la base de données
 """
 
-import sys
 import logging
+import sys
 from pathlib import Path
 
 # Ajouter src au path

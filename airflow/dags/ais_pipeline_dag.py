@@ -1,145 +1,98 @@
-from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.bash import BashOperator
-import sys
+"""Daily AIS pipeline: replays NOAA / MarineCadastre history one day per DAG run.
+
+Each run processes the NOAA file for its logical date. Loads are idempotent (upsert on
+(mmsi, base_datetime)), so any day can be re-run or backfilled safely:
+
+    airflow dags backfill ais_data_pipeline -s 2023-01-01 -e 2023-01-07
+
+Params (set when triggering manually):
+    max_records  rows read from the day's file (a full day is ~7M rows)
+    local_file   process this file instead of downloading (e.g. sample_data/sample_ais.csv)
+"""
+
+from __future__ import annotations
+
 import os
+import sys
+from datetime import datetime, timedelta
 
-# Ajouter le répertoire src au PATH
-sys.path.append('/opt/airflow/dags/src')
+from airflow.decorators import dag, task
+from airflow.models.param import Param
 
-from src.ingestion.data_loader import AISDataLoader
-from src.transformation.data_processor import AISDataProcessor
-from src.storage.database import DatabaseManager
-from src.config import Config
+# src/ is mounted at /opt/airflow/src (see docker-compose.yml)
+sys.path.insert(0, os.environ.get("AIS_PROJECT_ROOT", "/opt/airflow"))
 
-default_args = {
-    'owner': 'tanger-med',
-    'depends_on_past': False,
-    'start_date': datetime(2024, 1, 1),
-    'email_on_failure': True,
-    'email_on_retry': False,
-    'retries': 2,
-    'retry_delay': timedelta(minutes=5),
-}
+DATA_DIR = os.environ.get("AIS_DATA_DIR", "/opt/airflow/data")
 
-dag = DAG(
-    'ais_data_pipeline',
-    default_args=default_args,
-    description='Pipeline de traitement des données AIS',
-    schedule_interval='0 6 * * *',  # Exécution quotidienne à 6h
+
+@dag(
+    dag_id="ais_data_pipeline",
+    description="NOAA AIS -> clean -> Postgres (idempotent) -> vessel metrics",
+    schedule="@daily",
+    start_date=datetime(2023, 1, 1),
+    end_date=datetime(2023, 12, 31),   # NOAA publishes full years; 2023 is the latest that downloads
     catchup=False,
-    tags=['ais', 'maritime', 'tanger-med'],
+    max_active_runs=1,
+    default_args={"owner": "data-eng", "retries": 2, "retry_delay": timedelta(minutes=5)},
+    params={
+        "max_records": Param(200_000, type="integer", minimum=1),
+        "local_file": Param(None, type=["null", "string"]),
+    },
+    tags=["ais", "maritime", "postgres"],
 )
+def ais_data_pipeline():
+    @task
+    def extract(params=None, logical_date=None) -> str:
+        from src import pipeline
+        from src.config import Config
 
-def extract_ais_data(**context):
-    """Tâche d'extraction des données AIS"""
-    config = Config()
-    loader = AISDataLoader(config)
-    
-    # URL exemple - à adapter selon la source réelle
-    data_url = "https://example-ais-data-source.com/latest.csv"
-    local_path = f"/tmp/ais_data_{context['ds']}.csv"
-    
-    success = loader.download_ais_data(data_url, local_path)
-    if not success:
-        raise Exception("Échec du téléchargement des données AIS")
-    
-    return local_path
+        return pipeline.extract(
+            Config(), local_file=params.get("local_file"), noaa_date=logical_date.date()
+        )
 
-def transform_ais_data(**context):
-    """Tâche de transformation des données"""
-    ti = context['ti']
-    file_path = ti.xcom_pull(task_ids='extract_data')
-    
-    config = Config()
-    loader = AISDataLoader(config)
-    processor = AISDataProcessor()
-    
-    # Chargement
-    df = loader.load_csv_data(file_path)
-    if df is None:
-        raise Exception("Échec du chargement des données")
-    
-    # Transformation
-    cleaned_df = processor.clean_data(df)
-    vessel_metrics = processor.calculate_vessel_metrics(cleaned_df)
-    
-    # Sauvegarde temporaire
-    cleaned_path = f"/tmp/cleaned_ais_{context['ds']}.parquet"
-    metrics_path = f"/tmp/vessel_metrics_{context['ds']}.parquet"
-    
-    cleaned_df.to_parquet(cleaned_path)
-    vessel_metrics.to_parquet(metrics_path)
-    
-    return {'cleaned_data': cleaned_path, 'metrics_data': metrics_path}
+    @task
+    def transform(path: str, params=None, ds=None) -> str:
+        from src import pipeline
+        from src.config import Config
 
-def load_to_database(**context):
-    """Tâche de chargement en base de données"""
-    ti = context['ti']
-    paths = ti.xcom_pull(task_ids='transform_data')
-    
-    config = Config()
-    db_manager = DatabaseManager(config.database_url)
-    
-    # Création des tables si nécessaire
-    db_manager.create_tables()
-    
-    # Chargement des données
-    import pandas as pd
-    cleaned_df = pd.read_parquet(paths['cleaned_data'])
-    metrics_df = pd.read_parquet(paths['metrics_data'])
-    
-    db_manager.save_ais_data(cleaned_df)
-    db_manager.save_vessel_metrics(metrics_df)
+        cleaned = pipeline.transform(Config(), path, params["max_records"])
+        if cleaned.empty:
+            raise ValueError(f"No valid rows in {path}")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        out = os.path.join(DATA_DIR, f"cleaned_{ds}.parquet")
+        cleaned.to_parquet(out, index=False)
+        return out
 
-def generate_statistics(**context):
-    """Génération des statistiques"""
-    from src.analytics.statistics import StatisticsGenerator
-    
-    config = Config()
-    generator = StatisticsGenerator(config)
-    report = generator.generate_comprehensive_report()
-    
-    # Sauvegarde du rapport
-    import json
-    report_path = f"/tmp/ais_report_{context['ds']}.json"
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2, default=str)
-    
-    return report_path
+    @task
+    def load(cleaned_path: str) -> dict:
+        import pandas as pd
 
-# Définition des tâches
-extract_task = PythonOperator(
-    task_id='extract_data',
-    python_callable=extract_ais_data,
-    dag=dag,
-)
+        from src import pipeline
+        from src.config import Config
 
-transform_task = PythonOperator(
-    task_id='transform_data',
-    python_callable=transform_ais_data,
-    dag=dag,
-)
+        result = pipeline.load(Config(), pd.read_parquet(cleaned_path))
+        os.remove(cleaned_path)
+        return result.__dict__
 
-load_task = PythonOperator(
-    task_id='load_data',
-    python_callable=load_to_database,
-    dag=dag,
-)
+    @task
+    def quality_check(result: dict) -> None:
+        """Fail the run if the database doesn't contain the rows we just processed."""
+        from sqlalchemy import create_engine, text
 
-stats_task = PythonOperator(
-    task_id='generate_statistics',
-    python_callable=generate_statistics,
-    dag=dag,
-)
+        from src.config import Config
 
-# Nettoyage des fichiers temporaires
-cleanup_task = BashOperator(
-    task_id='cleanup',
-    bash_command='rm -f /tmp/ais_data_{{ ds }}* /tmp/cleaned_ais_{{ ds }}* /tmp/vessel_metrics_{{ ds }}*',
-    dag=dag,
-)
+        with create_engine(Config().database_url).connect() as conn:
+            vessels = conn.execute(text("SELECT COUNT(*) FROM vessel_metrics")).scalar()
+            bad = conn.execute(text(
+                "SELECT COUNT(*) FROM vessel_metrics "
+                "WHERE moving_time_hours + at_dock_time_hours > total_time_hours + 1e-6"
+            )).scalar()
+        if result["rows_received"] == 0 or vessels == 0:
+            raise ValueError("Quality check failed: no data loaded")
+        if bad:
+            raise ValueError(f"Quality check failed: {bad} vessels with inconsistent time metrics")
 
-# Définition des dépendances
-extract_task >> transform_task >> load_task >> stats_task >> cleanup_task
+    quality_check(load(transform(extract())))
+
+
+ais_data_pipeline()
