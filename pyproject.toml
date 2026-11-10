@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["integration: needs a running PostgreSQL (DATABASE_URL)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["scripts/explore_noaa_data.py", "dashboard"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["B008"]  # FastAPI's Depends()/Query() in defaults is idiomatic

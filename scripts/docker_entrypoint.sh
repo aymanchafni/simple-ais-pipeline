@@ -1,32 +1,14 @@
 #!/bin/bash
-set -e
+# One-shot pipeline run used by the `data-init` service.
+# PIPELINE_ARGS defaults to the bundled sample; override it to load NOAA data, e.g.
+#   PIPELINE_ARGS="--noaa-date 2023-01-01 --max-records 200000"
+set -euo pipefail
 
-echo "🚢 Démarrage du pipeline Tanger Med..."
-
-# Attendre que PostgreSQL soit prêt
-echo "Attente de PostgreSQL..."
-while ! pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USER; do
-  echo "PostgreSQL n'est pas encore prêt, attente..."
+echo "Waiting for PostgreSQL at ${DB_HOST}:${DB_PORT}..."
+until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" >/dev/null 2>&1; do
   sleep 2
 done
 
-echo "✅ PostgreSQL est prêt!"
-
-# Initialiser la base de données
-echo "🗄️ Initialisation de la base de données..."
-python scripts/init_db.py
-
-# Exécuter le pipeline avec les données d'exemple
-echo "📊 Chargement des données d'exemple..."
-if [ -f "sample_data/sample_ais.csv" ]; then
-    python scripts/run_pipeline.py --noaa-year 2024 --noaa-zone "01_01" --max-records 100000 --verbose
-    
-    #python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv --max-records 100 --verbose 
-    echo "✅ Données d'exemple chargées!"
-else
-    echo "⚠️ Fichier de données d'exemple non trouvé, démarrage sans données"
-fi
-
-# Démarrer l'application selon le service
-echo "🚀 Démarrage de l'application..."
-exec "$@"
+echo "Running pipeline with: ${PIPELINE_ARGS}"
+# shellcheck disable=SC2086
+python scripts/run_pipeline.py ${PIPELINE_ARGS}

@@ -1,13 +1,11 @@
-import requests
-import pandas as pd
 import logging
-import zipfile
 import os
-import tempfile
-import shutil
-from typing import Optional, List
-from pathlib import Path
-from urllib.parse import urlparse
+import zipfile
+from typing import List, Optional
+
+import pandas as pd
+import requests
+
 from src.config import Config
 
 logger = logging.getLogger(__name__)
@@ -19,16 +17,18 @@ class AISDataLoader:
         
     def download_ais_data(self, url: str, local_path: str) -> bool:
         """Télécharge les données AIS depuis la source publique (CSV ou ZIP)"""
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            logger.info(f"Fichier déjà présent, téléchargement ignoré: {local_path}")
+            return True
+        part_path = local_path + ".part"
         try:
             logger.info(f"Téléchargement des données depuis {url}")
-            
+
             # Créer le répertoire de destination si nécessaire
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
             
             # Headers pour simuler un navigateur (éviter les blocages)
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+            headers = {'User-Agent': 'ais-data-pipeline/2.0 (+https://github.com/aymanchafni/simple-ais-pipeline)'}
             
             response = requests.get(url, stream=True, headers=headers, timeout=30)
             response.raise_for_status()
@@ -42,7 +42,9 @@ class AISDataLoader:
             downloaded = 0
             chunk_size = 8192
             
-            with open(local_path, 'wb') as f:
+            # Écriture dans un fichier .part puis renommage atomique:
+            # un téléchargement interrompu ne laisse jamais un fichier tronqué "valide".
+            with open(part_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
@@ -51,8 +53,10 @@ class AISDataLoader:
                         # Afficher le progrès tous les 10MB
                         if downloaded % (10 * 1024 * 1024) < chunk_size and total_size > 0:
                             progress = (downloaded / total_size) * 100
-                            logger.info(f"Téléchargement: {progress:.1f}% ({downloaded / (1024*1024):.1f} MB)")
+                            mb = downloaded / (1024 * 1024)
+                            logger.info(f"Téléchargement: {progress:.1f}% ({mb:.1f} MB)")
             
+            os.replace(part_path, local_path)
             final_size = os.path.getsize(local_path)
             logger.info(f"✅ Fichier téléchargé: {final_size / (1024*1024):.1f} MB dans {local_path}")
             return True
@@ -133,8 +137,12 @@ class AISDataLoader:
             logger.warning(f"Impossible de détecter le format: {e}, utilisation du format par défaut")
             return 'noaa'
     
-    def load_csv_data(self, file_path: str) -> Optional[pd.DataFrame]:
-        """Charge les données CSV en DataFrame avec détection automatique du format"""
+    def load_csv_data(self, file_path: str, nrows: Optional[int] = None) -> Optional[pd.DataFrame]:
+        """Charge les données CSV en DataFrame avec détection automatique du format.
+
+        nrows: ne lit que les N premières lignes (évite de charger ~7M lignes en mémoire
+        quand on ne veut qu'un échantillon).
+        """
         try:
             logger.info(f"Chargement du fichier: {file_path}")
             
@@ -154,7 +162,7 @@ class AISDataLoader:
                 # Si plusieurs fichiers, les combiner
                 if len(extracted_files) > 1:
                     logger.info(f"Combinaison de {len(extracted_files)} fichiers CSV...")
-                    return self._combine_csv_files(extracted_files)
+                    return self._combine_csv_files(extracted_files, nrows=nrows)
             
             # Détecter le format
             ais_format = self.detect_ais_format(file_path)
@@ -192,7 +200,7 @@ class AISDataLoader:
             
             # Lecture du fichier avec gestion des erreurs
             logger.info("Lecture du fichier CSV...")
-            df = pd.read_csv(file_path, **read_params)
+            df = pd.read_csv(file_path, nrows=nrows, **read_params)
             
             logger.info(f"✅ Données chargées: {len(df):,} lignes, {len(df.columns)} colonnes")
             logger.info(f"Colonnes: {list(df.columns)}")
@@ -220,7 +228,9 @@ class AISDataLoader:
             logger.error(f"❌ Erreur lors du chargement: {e}")
             return None
     
-    def _combine_csv_files(self, file_paths: List[str]) -> Optional[pd.DataFrame]:
+    def _combine_csv_files(
+        self, file_paths: List[str], nrows: Optional[int] = None
+    ) -> Optional[pd.DataFrame]:
         """Combine plusieurs fichiers CSV en un seul DataFrame"""
         try:
             dataframes = []
@@ -228,7 +238,10 @@ class AISDataLoader:
             
             for file_path in file_paths:
                 logger.info(f"Lecture de {os.path.basename(file_path)}...")
-                df = pd.read_csv(file_path, low_memory=False, on_bad_lines='skip')
+                remaining = None if nrows is None else nrows - total_rows
+                if remaining is not None and remaining <= 0:
+                    break
+                df = pd.read_csv(file_path, low_memory=False, on_bad_lines='skip', nrows=remaining)
                 
                 if len(df) > 0:
                     dataframes.append(df)
@@ -269,7 +282,7 @@ class AISDataLoader:
                     df['BaseDateTime'] = pd.to_datetime(df['BaseDateTime'], errors='coerce')
                     date_range = f"{df['BaseDateTime'].min()} à {df['BaseDateTime'].max()}"
                     logger.info(f"  - Période: {date_range}")
-                except:
+                except (ValueError, TypeError):
                     pass
             
             # Types de navires
