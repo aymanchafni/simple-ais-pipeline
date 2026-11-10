@@ -8,7 +8,7 @@ from datetime import datetime
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Tanger Med - AIS Dashboard", 
+    page_title="AIS Maritime Traffic Dashboard",
     page_icon="🚢",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -17,6 +17,8 @@ st.set_page_config(
 # Configuration API - Détection automatique de l'environnement
 def get_api_url():
     """Détermine l'URL de l'API selon l'environnement"""
+    if os.getenv("API_URL"):
+        return os.environ["API_URL"]
     if os.path.exists('/.dockerenv'):
         return "http://app:8000"
     else:
@@ -40,8 +42,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header principal
-st.title("🚢 Tanger Med - Dashboard Trafic Maritime AIS")
-st.markdown("**Pipeline de données en temps réel pour l'analyse du trafic maritime**")
+st.title("🚢 Dashboard Trafic Maritime AIS")
+st.markdown("**Pipeline de données AIS (batch quotidien, idempotent) pour l'analyse du trafic maritime**")
 st.markdown("---")
 
 # Sidebar avec navigation et statut
@@ -152,17 +154,17 @@ with tab1:
             )
         
         with col3:
-            avg_distance = float(global_stats.get('avg_distance', 0))
+            avg_distance = float(global_stats.get('avg_distance') or 0)
             st.metric(
                 label="📏 Distance Moyenne",
                 value=f"{avg_distance:.1f} nm"
             )
         
         with col4:
-            quality = float(global_stats.get('valid_position_percentage', 0))
+            max_speed = float(global_stats.get('max_speed_recorded') or 0)
             st.metric(
-                label="✅ Qualité Données",
-                value=f"{quality:.1f}%"
+                label="⚡ Vitesse Max. Observée",
+                value=f"{max_speed:.1f} nœuds"
             )
         
         st.markdown("---")
@@ -373,8 +375,8 @@ with tab3:
             
             # Métriques de qualité
             quality_metrics = [
-                ('Positions Valides', data_quality.get('valid_positions_percentage', 0)),
-                ('Vitesses Valides', data_quality.get('valid_speeds_percentage', 0)),
-                ('Timestamps Valides', data_quality.get('valid_timestamps_percentage', 0)),
-                ('Noms Valides', data_quality.get('valid_names_percentage', 0))
+                ('Vitesses Renseignées', data_quality.get('valid_speeds_percentage', 0)),
+                ('Caps Renseignés', data_quality.get('valid_headings_percentage', 0)),
+                ('Types Renseignés', data_quality.get('valid_types_percentage', 0)),
+                ('Noms Renseignés', data_quality.get('valid_names_percentage', 0))
             ]

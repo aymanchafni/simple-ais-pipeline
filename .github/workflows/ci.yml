@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: tanger_med
+          POSTGRES_PASSWORD: password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:password@localhost:5432/tanger_med
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: ruff check .
+      - name: Unit + integration tests
+        run: pytest -v
+      - name: Pipeline runs end-to-end and is idempotent
+        run: |
+          python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv
+          python scripts/run_pipeline.py --local-file sample_data/sample_ais.csv
+          test "$(psql "$DATABASE_URL" -tAc 'SELECT COUNT(*) FROM ais_data')" = "15"
+      - name: Airflow DAG parses
+        run: |
+          pip install "apache-airflow==2.9.3" --constraint \
+            "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt"
+          airflow db migrate
+          python -c "from airflow.models import DagBag; b = DagBag('airflow/dags', include_examples=False); assert not b.import_errors, b.import_errors; print(list(b.dags))"
